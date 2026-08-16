@@ -1,3 +1,4 @@
+// Netlify deployment test
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertTriangle, ArrowDownUp, Ban, Bell, Box, Building2, CheckCircle2, ChevronDown, CircleHelp, ClipboardList, CreditCard, Filter, LayoutDashboard, LogOut, Menu, Moon, Package, Pencil, Plus, ReceiptText, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Sun, TrendingDown, TrendingUp, Users, Wallet, X } from 'lucide-react';
