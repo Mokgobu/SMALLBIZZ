@@ -1,0 +1,34 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() { return signedIn() && request.auth.token.admin == true; }
+    function account(businessId) { return get(/databases/$(database)/documents/businesses/$(businessId)); }
+    function hasAccess(businessId) {
+      let business = account(businessId).data;
+      return signedIn() && business.ownerId == request.auth.uid &&
+        (business.status == 'active' ||
+         (business.status == 'trial' && business.trialEndsAt > request.time));
+    }
+
+    match /businesses/{businessId} {
+      allow read: if isAdmin() || hasAccess(businessId);
+      // Business users must never change subscription or account status fields.
+      allow update: if hasAccess(businessId) &&
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['status', 'plan', 'paymentStatus', 'trialEndsAt',
+                   'subscriptionStartsAt', 'subscriptionEndsAt',
+                   'suspendedAt', 'suspensionReason']);
+      allow create, delete: if isAdmin();
+    }
+
+    match /{collection}/{document} {
+      // Applies to products, sales, expenses, customers, suppliers, etc.
+      allow read, delete: if isAdmin() || hasAccess(resource.data.businessId);
+      allow create: if isAdmin() || hasAccess(request.resource.data.businessId);
+      allow update: if isAdmin() ||
+        (hasAccess(resource.data.businessId) &&
+         request.resource.data.businessId == resource.data.businessId);
+    }
+  }
+}
