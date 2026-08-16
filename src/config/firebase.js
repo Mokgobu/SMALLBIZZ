@@ -14,11 +14,18 @@ const firebaseConfig = {
 export const firebaseConfigured = Boolean(import.meta.env.VITE_FIREBASE_API_KEY);
 
 // Initialize Firebase only if config is available
-let auth, db;
+let auth = null;
+let db = null;
+let app = null;
+
 if (firebaseConfigured) {
-  const app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (error) {
+    console.error('Firebase initialization error:', error);
+  }
 }
 
-export { auth, db };
+export { auth, db, app };

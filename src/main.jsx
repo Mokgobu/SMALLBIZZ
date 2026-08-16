@@ -52,7 +52,13 @@ function App(){
    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
      if (currentUser) {
        setUser(currentUser);
-       setScreen('dashboard');
+       // Check if user has completed onboarding
+       const onboardingComplete = localStorage.getItem(`onboarded-${currentUser.uid}`);
+       if (onboardingComplete) {
+         setScreen('dashboard');
+       } else {
+         setScreen('onboarding');
+       }
      } else {
        setUser(null);
        setScreen('login');
@@ -77,7 +83,7 @@ function App(){
  
  if (loading) return <div className="auth"><section className="auth-card"><Brand/><p>Loading...</p></section></div>;
  if(screen==='login') return <Login onDemo={()=>setScreen('dashboard')} onStart={()=>setScreen('onboarding')} onAdmin={()=>setScreen('admin')}/>;
- if(screen==='onboarding') return <Onboarding done={()=>setScreen('dashboard')}/>;
+ if(screen==='onboarding') return <Onboarding user={user} done={()=>{localStorage.setItem(`onboarded-${user.uid}`, 'true'); setScreen('dashboard');}}/>;
  if(screen==='admin') return <AdminPanel businesses={businesses} setBusinesses={setBusinesses} logout={logout}/>;
  if(['suspended','cancelled'].includes(businessAccount.status)) return <AccountBlocked account={businessAccount} logout={logout}/>;
  const updateStock=(id, amount, type)=>{setProducts(old=>old.map(p=>p.id===id?{...p,stock:Math.max(0,p.stock+amount)}:p)); const product=products.find(p=>p.id===id); setMovements(old=>[{id:Date.now(),name:product?.name,variant:product?.variant,amount,type,date:'Just now'},...old]); notify(`${type}: stock updated`)};
@@ -86,6 +92,14 @@ function App(){
 function Login({onDemo,onStart,onAdmin}){const [mode,setMode]=useState('login'); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [error, setError] = useState(''); const [loading, setLoading] = useState(false);
  const handleAuth = async () => {
    setError('');
+   if (!firebaseConfigured) {
+     setError('Firebase is not configured. Check your environment variables.');
+     return;
+   }
+   if (!auth) {
+     setError('Firebase authentication not initialized.');
+     return;
+   }
    setLoading(true);
    try {
      if (mode === 'login') {
@@ -102,7 +116,7 @@ function Login({onDemo,onStart,onAdmin}){const [mode,setMode]=useState('login');
 }
 function Brand(){return <div className="brand"><span className="brand-mark">S</span><span>Small<span>Bizz</span></span></div>}
 function Onboarding({done}){ const [step,setStep]=useState(1),[name,setName]=useState(''); const next=()=>step<4?setStep(step+1):done(); return <div className="onboard"><div className="onboard-top"><Brand/><span>Step {step} of 4</span></div><div className="progress"><i style={{width:`${step*25}%`}}/></div><section className="onboard-card">{step===1&&<><span className="welcome-icon">👋</span><h1>Welcome to SmallBizz</h1><p>Let’s set up your business. It only takes a few minutes.</p></>}{step===2&&<><h1>Tell us about your business</h1><p>This appears on your receipts and invoices.</p><label>Business name<input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Modimo Ke Lepara"/></label><label>Your name<input placeholder="e.g. Thandi Mokoena"/></label></>}{step===3&&<><h1>What kind of business do you run?</h1><p>We’ll tailor categories and tips to suit you.</p><div className="type-grid">{['Retail','Clothing','Food','Salon / Barber','Services','Hardware','Bakery','Other'].map(x=><button className={x==='Clothing'?'selected':''} key={x}>{x}</button>)}</div></>}{step===4&&<><span className="welcome-icon">✨</span><h1>You’re ready to go!</h1><p>Add your first product and make your first sale whenever you’re ready. Your dashboard will keep the important numbers simple.</p></>}<div className="onboard-actions">{step>1&&<button className="secondary" onClick={()=>setStep(step-1)}>Back</button>}<button className="primary" onClick={next}>{step===4?'Go to dashboard':'Continue'} →</button></div></section></div>}
-function Sidebar({page,setPage,onLogout}){return <aside><Brand/><nav>{nav.map(([name,Icon])=><button key={name} className={page===name?'selected':''} onClick={()=>setPage(name)}><Icon size={20}/>{name}</button>)}</nav><div className="sidebar-footer"><button><CircleHelp size={20}/> Help centre</button><button onClick={onLogout}><LogOut size={20}/> Log out</button><div className="user"><div>TM</div><span><b>Thandi Mokoena</b><small>Modimo Ke Lepara</small></span><ChevronDown size={16}/></div></div></aside>}
+function Sidebar({page,setPage,onLogout}){const userName = localStorage.getItem('user-name') || 'User'; const businessName = localStorage.getItem('business-name') || 'Business'; const initials = userName.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(); return <aside><Brand/><nav>{nav.map(([name,Icon])=><button key={name} className={page===name?'selected':''} onClick={()=>setPage(name)}><Icon size={20}/>{name}</button>)}</nav><div className="sidebar-footer"><button><CircleHelp size={20}/> Help centre</button><button onClick={onLogout}><LogOut size={20}/> Log out</button><div className="user"><div>{initials}</div><span><b>{userName}</b><small>{businessName}</small></span><ChevronDown size={16}/></div></div></aside>}
 function Topbar({page,dark,setDark,menu,setMenu}){return <header><button className="menu" onClick={()=>setMenu(!menu)}>{menu?<X/>:<Menu/>}</button><div><h1>{page}</h1><p>{page==='Dashboard'?'Here’s how your business is doing today.':'Manage your business details and records.'}</p></div><div className="header-actions"><button className="icon" onClick={()=>setDark(!dark)}>{dark?<Sun size={20}/>:<Moon size={20}/>}</button><button className="icon notification"><Bell size={20}/><i/></button><button className="help"><CircleHelp size={19}/> Help</button></div></header>}
 function MobileNav({page,setPage}){return <div className="mobile-nav">{nav.map(([n,I])=><button className={page===n?'selected':''} key={n} onClick={()=>setPage(n)}><I size={19}/>{n}</button>)}</div>}
 function Page({page,period,setPeriod,notify,products,setProducts,movements,updateStock,sales,setSales,expenses,setExpenses,customers,setCustomers,suppliers,setSuppliers}){if(page==='Dashboard')return <Dashboard period={period} setPeriod={setPeriod} notify={notify}/>;if(page==='Products')return <Products products={products} setProducts={setProducts} notify={notify}/>;if(page==='Inventory')return <Inventory products={products} movements={movements} updateStock={updateStock}/>;if(page==='Sales')return <Sales products={products} sales={sales} setSales={setSales} updateStock={updateStock} notify={notify}/>;if(page==='Expenses')return <Expenses expenses={expenses} setExpenses={setExpenses} notify={notify}/>;if(page==='Customers')return <Customers customers={customers} setCustomers={setCustomers} sales={sales} notify={notify}/>;if(page==='Suppliers')return <Suppliers suppliers={suppliers} setSuppliers={setSuppliers} notify={notify}/>;if(page==='Reports')return <Reports sales={sales} expenses={expenses} products={products} customers={customers} notify={notify}/>;return <section className="placeholder"><div className="placeholder-icon"><Settings size={28}/></div><h2>Your business settings will live here</h2><p>This screen is ready for the final configuration phase.</p></section>}
