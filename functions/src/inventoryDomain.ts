@@ -1,0 +1,24 @@
+import { daysUntilExpiry } from './expiryDomain.js'
+
+export type FefoBatch = { id: string; quantityRemaining: number; expiryDate: string | null; status: string; costPriceSnapshot: number }
+export function allocateFefo(batches: FefoBatch[], quantity: number, today: string) {
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('Quantity must be a positive number.')
+  const eligible = batches.filter((batch) => batch.status === 'active' && Number.isFinite(batch.quantityRemaining) && batch.quantityRemaining > 0 && (!batch.expiryDate || daysUntilExpiry(batch.expiryDate, today) >= 0)).sort((a, b) => (a.expiryDate ?? '9999-12-31').localeCompare(b.expiryDate ?? '9999-12-31') || a.id.localeCompare(b.id))
+  let remaining = quantity; const allocations: Array<{ batchId: string; quantity: number; quantityBefore: number; quantityAfter: number; costPriceSnapshot: number; expiryDate: string | null }> = []
+  for (const batch of eligible) { if (remaining <= 0.000001) break; const used = Math.min(remaining, batch.quantityRemaining); allocations.push({ batchId: batch.id, quantity: used, quantityBefore: batch.quantityRemaining, quantityAfter: Number((batch.quantityRemaining - used).toFixed(6)), costPriceSnapshot: Number(batch.costPriceSnapshot ?? 0), expiryDate: batch.expiryDate }); remaining = Number((remaining - used).toFixed(6)) }
+  if (remaining > 0.000001) throw new Error(`Insufficient sellable batch stock. Available: ${Number((quantity - remaining).toFixed(6))}.`)
+  return allocations
+}
+
+const id = (value: unknown, label: string) => { const result = typeof value === 'string' ? value.trim() : ''; if (!/^[A-Za-z0-9_-]{1,150}$/.test(result)) throw new Error(`Choose a valid ${label}.`); return result }
+const whole = (value: unknown, label: string, allowZero = false) => { const number=Number(value); if (!Number.isFinite(number) || number < (allowZero ? 0 : 0.000001) || number > 1000000) throw new Error(`${label} must be a valid non-negative number.`); return Number(number.toFixed(6)) }
+export function validateReceiveStock(data: unknown) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Stock receipt details are required.'); const v = data as Record<string, unknown>
+  if (Object.keys(v).some((key) => !['productId','quantity','supplierId','reference','costPrice','expiryDate'].includes(key))) throw new Error('Stock receipt contains unsupported fields.')
+  const costPrice = v.costPrice == null ? undefined : Number(v.costPrice); if (costPrice != null && (!Number.isFinite(costPrice) || costPrice < 0 || costPrice > 100000000)) throw new Error('Cost price is invalid.')
+  const expiryDate = v.expiryDate == null || v.expiryDate === '' ? null : String(v.expiryDate); if (expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) throw new Error('Expiry date is invalid.')
+  return { productId: id(v.productId, 'product'), quantity: whole(v.quantity, 'Quantity'), supplierId: v.supplierId ? id(v.supplierId, 'supplier') : null, reference: typeof v.reference === 'string' ? v.reference.trim().slice(0, 150) : '', costPrice, expiryDate }
+}
+export const WRITE_OFF_REASONS = ['expired','damaged','spoiled','stolen','internal_use','stock_count_correction','other'] as const
+export function validateWriteOff(data: unknown) { if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Write-off details are required.'); const v=data as Record<string,unknown>; if(Object.keys(v).some(k=>!['productId','batchId','quantity','reason','notes'].includes(k))) throw new Error('Write-off contains unsupported fields.'); if(!WRITE_OFF_REASONS.includes(v.reason as never)) throw new Error('Choose a valid write-off reason.'); const notes=typeof v.notes==='string'?v.notes.trim():''; if(notes.length>500 || ((v.reason==='other'||v.reason==='stock_count_correction')&&!notes)) throw new Error('Notes are required for this write-off reason.'); return {productId:id(v.productId,'product'),batchId:v.batchId?id(v.batchId,'batch'):null,quantity:whole(v.quantity,'Quantity'),reason:v.reason as typeof WRITE_OFF_REASONS[number],notes} }
+export function validateStockCount(data: unknown) { if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Stock count details are required.'); const v=data as Record<string,unknown>; if(Object.keys(v).some(k=>!['productId','countedQuantity','reason','notes'].includes(k))) throw new Error('Stock count contains unsupported fields.'); const reason=typeof v.reason==='string'?v.reason.trim():''; const notes=typeof v.notes==='string'?v.notes.trim():''; if(!reason||reason.length>200||notes.length>500) throw new Error('A valid stock count reason is required.'); return {productId:id(v.productId,'product'),countedQuantity:whole(v.countedQuantity,'Counted quantity',true),reason,notes} }

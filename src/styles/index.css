@@ -1,0 +1,161 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .receipt-print,
+  .receipt-print * {
+    visibility: visible;
+  }
+
+  .receipt-print {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    box-shadow: none;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-900 antialiased;
+  background-image:
+    radial-gradient(circle at top left, rgba(45, 212, 191, 0.12), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(59, 130, 246, 0.10), transparent 28%),
+    linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+}
+
+.card {
+  @apply rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-[0_20px_45px_rgba(15,23,42,0.04)] backdrop-blur-sm;
+}
+
+.metric-card {
+  @apply card flex h-full flex-col justify-between;
+}
+
+.section-shell {
+  @apply rounded-2xl border border-slate-200/80 bg-white/70 p-4 shadow-[0_18px_35px_rgba(15,23,42,0.03)] backdrop-blur-sm;
+}
+
+@keyframes loader-mark-enter {
+  from { opacity: 0; transform: scale(0.9) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes loader-copy-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes loader-pulse {
+  0%, 100% { height: 0.35rem; opacity: 0.45; }
+  50% { height: 1rem; opacity: 1; }
+}
+
+@keyframes content-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.app-loader__glow {
+  @apply pointer-events-none absolute rounded-full blur-3xl;
+}
+
+.app-loader__glow--top {
+  width: 22rem;
+  height: 22rem;
+  right: -8rem;
+  top: -10rem;
+  background: rgba(20, 184, 166, 0.16);
+}
+
+.app-loader__glow--bottom {
+  width: 18rem;
+  height: 18rem;
+  bottom: -9rem;
+  left: -7rem;
+  background: rgba(59, 130, 246, 0.10);
+}
+
+.app-loader__mark {
+  @apply flex h-16 w-16 items-center justify-center rounded-2xl border border-teal-200/20 bg-teal-400/15 text-lg font-bold text-teal-200 shadow-2xl shadow-teal-950/40;
+  animation: loader-mark-enter 320ms ease-out both;
+}
+
+.app-loader__wordmark {
+  animation: loader-copy-enter 280ms 70ms ease-out both;
+}
+
+.app-loader__message,
+.app-loader__support {
+  animation: loader-copy-enter 280ms 130ms ease-out both;
+}
+
+.app-loader__indicator {
+  height: 1rem;
+}
+
+.app-loader__indicator span {
+  @apply block w-1.5 rounded-full bg-teal-300;
+  animation: loader-pulse 850ms ease-in-out infinite;
+}
+
+.app-loader__indicator span:nth-child(2) { animation-delay: 120ms; }
+.app-loader__indicator span:nth-child(3) { animation-delay: 240ms; }
+
+.app-content-enter,
+.dashboard-enter {
+  animation: content-enter 220ms ease-out both;
+}
+
+.dashboard-rise {
+  animation: content-enter 300ms var(--enter-delay, 0ms) ease-out both;
+}
+
+input, select, textarea, button, a {
+  @apply transition-colors duration-150;
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  @apply outline-none ring-2 ring-primary/60 ring-offset-2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .app-loader__mark,
+  .app-loader__wordmark,
+  .app-loader__message,
+  .app-loader__support,
+  .app-loader__indicator span,
+  .app-content-enter,
+  .dashboard-enter,
+  .dashboard-rise {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+@media print {
+  body {
+    background: white;
+  }
+}

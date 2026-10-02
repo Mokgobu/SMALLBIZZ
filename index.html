@@ -1,12 +1,29 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SmallBizz - Business Management</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.jsx"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SmallBizz</title>
+    <style>
+      .startup-shell { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; background: #f8fafc; color: #0f172a; font-family: ui-sans-serif, system-ui, sans-serif; }
+      .startup-card { text-align: center; }
+      .startup-mark { width: 2.25rem; height: 2.25rem; margin: 0 auto 1rem; border: 4px solid #cbd5e1; border-top-color: #2563eb; border-radius: 9999px; animation: startup-spin .8s linear infinite; }
+      .startup-brand { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -.025em; }
+      .startup-copy { margin: .4rem 0 0; color: #475569; font-size: .9rem; }
+      @keyframes startup-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .startup-mark { animation: none; border-top-color: #2563eb; } }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <main class="startup-shell" aria-live="polite" aria-busy="true">
+        <div class="startup-card">
+          <div class="startup-mark" aria-hidden="true"></div>
+          <h1 class="startup-brand">SmallBizz</h1>
+          <p class="startup-copy">Loading your business&hellip;</p>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

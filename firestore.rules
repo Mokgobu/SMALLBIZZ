@@ -1,34 +1,641 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() { return request.auth != null; }
-    function isAdmin() { return signedIn() && request.auth.token.admin == true; }
-    function account(businessId) { return get(/databases/$(database)/documents/businesses/$(businessId)); }
-    function hasAccess(businessId) {
-      let business = account(businessId).data;
-      return signedIn() && business.ownerId == request.auth.uid &&
-        (business.status == 'active' ||
-         (business.status == 'trial' && business.trialEndsAt > request.time));
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Platform roles come from server-managed custom claims, never profile fields.
+    function isPlatformAdmin() {
+      return isSignedIn() && request.auth.token.platformAdmin == true;
+    }
+
+    function isActiveUser() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus == 'ACTIVE';
+    }
+
+    function hasMembership(businessId) {
+      return isActiveUser()
+        && exists(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid));
+    }
+
+    function isLegacyOwner(businessId) {
+      return isActiveUser()
+        && exists(/databases/$(database)/documents/businesses/$(businessId))
+        && !exists(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid
+        && get(/databases/$(database)/documents/businesses/$(businessId)).data.memberUids is list
+        && request.auth.uid in get(/databases/$(database)/documents/businesses/$(businessId)).data.memberUids;
+    }
+
+    function isBusinessMember(businessId) {
+      return isLegacyOwner(businessId) || (
+        hasMembership(businessId)
+        && get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.status == 'active'
+      );
+    }
+
+    function isBusinessAccessible(businessId) {
+      return isBusinessMember(businessId)
+        && get(/databases/$(database)/documents/businesses/$(businessId)).data.accountStatus in ['TRIAL', 'ACTIVE'];
+    }
+
+    function hasBusinessRole(businessId, roles) {
+      return isBusinessAccessible(businessId) && (
+        (isLegacyOwner(businessId) && 'owner' in roles)
+        || get(/databases/$(database)/documents/businesses/$(businessId)/members/$(request.auth.uid)).data.role in roles
+      );
+    }
+
+    match /users/{userId} {
+      allow read: if isPlatformAdmin() || (isSignedIn() && request.auth.uid == userId);
+
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll([
+          'fullName', 'email', 'role', 'accountStatus', 'businessId',
+          'linkedBusinessId',
+          'onboardingComplete', 'termsVersion', 'termsAcceptedAt',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'fullName', 'email', 'role', 'accountStatus', 'businessId',
+          'linkedBusinessId',
+          'onboardingComplete', 'termsVersion', 'termsAcceptedAt',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.role == 'USER'
+        && request.resource.data.accountStatus == 'ACTIVE'
+        && request.resource.data.linkedBusinessId == request.resource.data.businessId
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && (
+          (
+            request.resource.data.businessId == null
+            && request.resource.data.onboardingComplete == false
+            && request.resource.data.termsVersion == null
+            && request.resource.data.termsAcceptedAt == null
+          ) || (
+            request.resource.data.businessId is string
+            && request.resource.data.onboardingComplete == true
+            && request.resource.data.termsVersion is string
+            && request.resource.data.termsAcceptedAt == request.time
+            && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerUid == request.auth.uid
+            && request.auth.uid in getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.memberUids
+          )
+        );
+
+      allow update: if (
+        isPlatformAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['accountStatus', 'updatedAt'])
+        && request.resource.data.accountStatus in ['ACTIVE', 'SUSPENDED', 'CANCELLED']
+        && request.resource.data.updatedAt == request.time
+      ) || (
+        isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.accountStatus == resource.data.accountStatus
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'fullName', 'phone', 'photoURL', 'businessId', 'onboardingComplete',
+          'linkedBusinessId', 'termsVersion', 'termsAcceptedAt', 'updatedAt'
+        ])
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.onboardingComplete == (request.resource.data.businessId != null)
+        && (
+          (
+            request.resource.data.businessId == resource.data.businessId
+            && request.resource.data.linkedBusinessId == resource.data.linkedBusinessId
+            && request.resource.data.onboardingComplete == resource.data.onboardingComplete
+            && request.resource.data.termsVersion == resource.data.termsVersion
+            && request.resource.data.termsAcceptedAt == resource.data.termsAcceptedAt
+          )
+          || (
+            resource.data.businessId == null
+            && request.resource.data.businessId is string
+            && request.resource.data.linkedBusinessId == request.resource.data.businessId
+            && getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerUid == request.auth.uid
+            && request.auth.uid in getAfter(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.memberUids
+            && request.resource.data.termsVersion is string
+            && request.resource.data.termsAcceptedAt == request.time
+          )
+        )
+      );
+
+      allow delete: if false;
     }
 
     match /businesses/{businessId} {
-      allow read: if isAdmin() || hasAccess(businessId);
-      // Business users must never change subscription or account status fields.
-      allow update: if hasAccess(businessId) &&
-        !request.resource.data.diff(resource.data).affectedKeys()
-          .hasAny(['status', 'plan', 'paymentStatus', 'trialEndsAt',
-                   'subscriptionStartsAt', 'subscriptionEndsAt',
-                   'suspendedAt', 'suspensionReason']);
-      allow create, delete: if isAdmin();
+      allow read: if isPlatformAdmin() || isBusinessAccessible(businessId);
+
+      allow create: if isSignedIn()
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus == 'ACTIVE'
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == businessId
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.onboardingComplete == true
+        && request.resource.data.keys().hasAll([
+          'name', 'type', 'ownerUid', 'memberUids', 'accountStatus', 'planId',
+          'trialStartedAt', 'trialEndsAt', 'currency', 'phone', 'email',
+          'address', 'website', 'registrationNumber', 'vatRegistered',
+          'vatNumber', 'invoicePrefix', 'onboardingComplete', 'termsVersion',
+          'termsAcceptedAt', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'name', 'type', 'ownerUid', 'memberUids', 'accountStatus', 'planId',
+          'trialStartedAt', 'trialEndsAt', 'currency', 'phone', 'email',
+          'address', 'website', 'registrationNumber', 'vatRegistered',
+          'vatNumber', 'invoicePrefix', 'onboardingComplete', 'termsVersion',
+          'termsAcceptedAt', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.type is string
+        && request.resource.data.type.size() > 0
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.memberUids == [request.auth.uid]
+        && request.resource.data.accountStatus == 'TRIAL'
+        && request.resource.data.planId == 'trial'
+        && request.resource.data.onboardingComplete == true
+        && request.resource.data.termsVersion is string
+        && request.resource.data.termsAcceptedAt == request.time
+        && request.resource.data.trialStartedAt == request.time
+        && request.resource.data.trialEndsAt is timestamp
+        && request.resource.data.trialEndsAt > request.time
+        && request.resource.data.trialEndsAt <= request.time + duration.value(15, 'd')
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      allow update: if (
+        isPlatformAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'accountStatus', 'planId', 'trialEndsAt', 'updatedAt'
+        ])
+        && request.resource.data.accountStatus in ['TRIAL', 'ACTIVE', 'SUSPENDED', 'CANCELLED']
+        && request.resource.data.updatedAt == request.time
+      ) || (
+        hasBusinessRole(businessId, ['owner'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'type', 'currency', 'phone', 'email', 'address', 'website',
+          'registrationNumber', 'vatRegistered', 'vatNumber', 'invoicePrefix',
+          'updatedAt'
+        ])
+        && request.resource.data.updatedAt == request.time
+      );
+
+      allow delete: if false;
+
+      match /members/{memberUid} {
+        allow read: if isPlatformAdmin()
+          || hasBusinessRole(businessId, ['owner'])
+          || (
+            isActiveUser()
+            && request.auth.uid == memberUid
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == businessId
+          );
+
+        // Only the owner's own membership may be bootstrapped with the initial
+        // business onboarding batch. All later staff mutations use Admin SDK.
+        allow create: if isSignedIn()
+          && request.auth.uid == memberUid
+          && !exists(/databases/$(database)/documents/businesses/$(businessId))
+          && getAfter(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid
+          && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == businessId
+          && request.resource.data.keys().hasAll([
+            'uid', 'displayName', 'email', 'role', 'status', 'invitedBy',
+            'createdAt', 'updatedAt', 'joinedAt', 'lastActiveAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'uid', 'displayName', 'email', 'role', 'status', 'invitedBy',
+            'createdAt', 'updatedAt', 'joinedAt', 'lastActiveAt'
+          ])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.displayName is string
+          && request.resource.data.email is string
+          && request.resource.data.role == 'owner'
+          && request.resource.data.status == 'active'
+          && request.resource.data.invitedBy == null
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.joinedAt == request.time
+          && request.resource.data.lastActiveAt == request.time;
+
+        allow update, delete: if false;
+      }
+
+      match /staffActivity/{activityId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner']);
+        allow create, update, delete: if false;
+      }
+
+      match /staffInvitations/{invitationId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner']);
+        allow create, update, delete: if false;
+      }
+
+      match /staffInvitationLocks/{lockId} {
+        allow read, write: if false;
+      }
+
+      match /products/{productId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager']);
+
+        allow create: if hasBusinessRole(businessId, ['owner', 'manager'])
+          && request.resource.data.keys().hasAll([
+            'name', 'description', 'sku', 'barcode', 'category', 'sellingPrice',
+            'costPrice', 'quantity', 'reorderLevel', 'trackStock', 'unit',
+            'status', 'lastMovementId', 'createdAt', 'updatedAt', 'createdBy'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'name', 'description', 'sku', 'barcode', 'category', 'sellingPrice',
+            'costPrice', 'quantity', 'reorderLevel', 'trackStock', 'unit',
+            'status', 'lastMovementId', 'createdAt', 'updatedAt', 'createdBy',
+            'tracksExpiry', 'shelfLifeDays', 'expiryWarningDays', 'expiryCriticalDays',
+            'productClass', 'menuItem', 'recipeId', 'isIngredient'
+          ])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.description is string
+          && request.resource.data.sku is string
+          && request.resource.data.barcode is string
+          && request.resource.data.category is string
+          && request.resource.data.sellingPrice is number
+          && request.resource.data.sellingPrice >= 0
+          && request.resource.data.costPrice is number
+          && request.resource.data.costPrice >= 0
+          && request.resource.data.quantity is number
+          && request.resource.data.quantity >= 0
+          && request.resource.data.reorderLevel is number
+          && request.resource.data.reorderLevel >= 0
+          && request.resource.data.trackStock is bool
+          && request.resource.data.unit is string
+          && request.resource.data.unit.size() > 0
+          && request.resource.data.status == 'active'
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && (
+            (request.resource.data.quantity == 0 && request.resource.data.lastMovementId == null)
+            || (
+              request.resource.data.trackStock == true
+              && request.resource.data.quantity > 0
+              && request.resource.data.lastMovementId is string
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/inventoryMovements/$(request.resource.data.lastMovementId)).data.productId == productId
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/inventoryMovements/$(request.resource.data.lastMovementId)).data.type == 'opening_stock'
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/inventoryMovements/$(request.resource.data.lastMovementId)).data.quantityAfter == request.resource.data.quantity
+            )
+          );
+
+        allow update: if hasBusinessRole(businessId, ['owner', 'manager'])
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.quantity is number
+          && request.resource.data.quantity >= 0
+          && (
+            (
+              request.resource.data.quantity == resource.data.quantity
+              && request.resource.data.lastMovementId == resource.data.lastMovementId
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'name', 'description', 'sku', 'barcode', 'category', 'sellingPrice',
+                'costPrice', 'reorderLevel', 'trackStock', 'unit', 'status', 'updatedAt',
+                'tracksExpiry', 'shelfLifeDays', 'expiryWarningDays', 'expiryCriticalDays',
+                'productClass', 'menuItem', 'recipeId', 'isIngredient'
+              ])
+              && request.resource.data.name is string
+              && request.resource.data.name.size() > 0
+              && request.resource.data.description is string
+              && request.resource.data.sku is string
+              && request.resource.data.barcode is string
+              && request.resource.data.category is string
+              && request.resource.data.sellingPrice is number
+              && request.resource.data.sellingPrice >= 0
+              && request.resource.data.costPrice is number
+              && request.resource.data.costPrice >= 0
+              && request.resource.data.reorderLevel is number
+              && request.resource.data.reorderLevel >= 0
+              && request.resource.data.trackStock is bool
+              && request.resource.data.unit is string
+              && request.resource.data.unit.size() > 0
+              && request.resource.data.status in ['active', 'archived']
+            ) || (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'quantity', 'lastMovementId', 'updatedAt'
+              ])
+              && request.resource.data.lastMovementId is string
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/inventoryMovements/$(request.resource.data.lastMovementId)).data.productId == productId
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/inventoryMovements/$(request.resource.data.lastMovementId)).data.quantityBefore == resource.data.quantity
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/inventoryMovements/$(request.resource.data.lastMovementId)).data.quantityAfter == request.resource.data.quantity
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/inventoryMovements/$(request.resource.data.lastMovementId)).data.createdBy == request.auth.uid
+            )
+          );
+
+        allow delete: if false;
+      }
+
+      match /inventoryMovements/{movementId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager', 'supervisor']);
+
+        allow create: if hasBusinessRole(businessId, ['owner', 'manager'])
+          && request.resource.data.keys().hasAll([
+            'productId', 'productName', 'type', 'quantityChange',
+            'quantityBefore', 'quantityAfter', 'reason', 'referenceId',
+            'createdAt', 'createdBy'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'productId', 'productName', 'type', 'quantityChange',
+            'quantityBefore', 'quantityAfter', 'reason', 'referenceId',
+            'createdAt', 'createdBy'
+          ])
+          && request.resource.data.productId is string
+          && request.resource.data.productName is string
+          && request.resource.data.type in [
+            'opening_stock', 'stock_in', 'stock_out', 'sale', 'adjustment',
+            'return', 'damaged', 'expired'
+          ]
+          && request.resource.data.quantityChange is number
+          && request.resource.data.quantityChange != 0
+          && request.resource.data.quantityBefore is number
+          && request.resource.data.quantityBefore >= 0
+          && request.resource.data.quantityAfter is number
+          && request.resource.data.quantityAfter >= 0
+          && request.resource.data.quantityAfter == request.resource.data.quantityBefore + request.resource.data.quantityChange
+          && request.resource.data.reason is string
+          && request.resource.data.reason.size() > 0
+          && (request.resource.data.referenceId == null || request.resource.data.referenceId is string)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && getAfter(/databases/$(database)/documents/businesses/$(businessId)/products/$(request.resource.data.productId)).data.quantity == request.resource.data.quantityAfter
+          && getAfter(/databases/$(database)/documents/businesses/$(businessId)/products/$(request.resource.data.productId)).data.name == request.resource.data.productName
+          && getAfter(/databases/$(database)/documents/businesses/$(businessId)/products/$(request.resource.data.productId)).data.lastMovementId == movementId
+          && (
+            (
+              !exists(/databases/$(database)/documents/businesses/$(businessId)/products/$(request.resource.data.productId))
+              && request.resource.data.type == 'opening_stock'
+              && request.resource.data.quantityBefore == 0
+            ) || (
+              exists(/databases/$(database)/documents/businesses/$(businessId)/products/$(request.resource.data.productId))
+              && request.resource.data.type != 'opening_stock'
+              && get(/databases/$(database)/documents/businesses/$(businessId)/products/$(request.resource.data.productId)).data.quantity == request.resource.data.quantityBefore
+            )
+          )
+          && (
+            (request.resource.data.type != 'sale' && request.resource.data.referenceId == null)
+            || (
+              request.resource.data.type == 'sale'
+              && request.resource.data.referenceId is string
+              && getAfter(/databases/$(database)/documents/businesses/$(businessId)/sales/$(request.resource.data.referenceId)).data.createdBy == request.auth.uid
+            )
+          );
+
+        allow update, delete: if false;
+      }
+
+      match /sales/{saleId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager']);
+
+        allow create: if false
+          && request.resource.data.keys().hasAll([
+            'items', 'itemCount', 'subtotal', 'discount', 'total',
+            'grossProfit', 'paymentMethod', 'notes', 'customerId',
+            'customerNameSnapshot', 'createdAt', 'createdBy'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'items', 'itemCount', 'subtotal', 'discount', 'total',
+            'grossProfit', 'paymentMethod', 'notes', 'customerId',
+            'customerNameSnapshot', 'createdAt', 'createdBy'
+          ])
+          && request.resource.data.items is list
+          && request.resource.data.items.size() > 0
+          && request.resource.data.items.size() <= 100
+          && request.resource.data.itemCount is int
+          && request.resource.data.itemCount >= request.resource.data.items.size()
+          && request.resource.data.subtotal is number
+          && request.resource.data.subtotal >= 0
+          && request.resource.data.discount is number
+          && request.resource.data.discount >= 0
+          && request.resource.data.discount <= request.resource.data.subtotal
+          && request.resource.data.total is number
+          && request.resource.data.total >= request.resource.data.subtotal - request.resource.data.discount - 0.001
+          && request.resource.data.total <= request.resource.data.subtotal - request.resource.data.discount + 0.001
+          && request.resource.data.grossProfit is number
+          && request.resource.data.paymentMethod in ['cash', 'card', 'eft', 'mobile', 'other']
+          && request.resource.data.notes is string
+          && (
+            (request.resource.data.customerId == null && request.resource.data.customerNameSnapshot == null)
+            || (
+              request.resource.data.customerId is string
+              && get(/databases/$(database)/documents/businesses/$(businessId)/customers/$(request.resource.data.customerId)).data.status == 'active'
+              && get(/databases/$(database)/documents/businesses/$(businessId)/customers/$(request.resource.data.customerId)).data.displayName == request.resource.data.customerNameSnapshot
+            )
+          )
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.createdBy == request.auth.uid;
+
+        allow update, delete: if false;
+      }
+
+      // Recipe and kitchen mutations are trusted callable operations. Keeping
+      // browser writes closed preserves immutable recipe versions and status audit.
+      match /recipes/{recipeId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager', 'supervisor']);
+        allow create, update, delete: if false;
+      }
+
+      match /recipeVersions/{versionId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager', 'supervisor']);
+        allow create, update, delete: if false;
+      }
+
+      match /kitchenOrders/{orderId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager', 'supervisor', 'cashier']);
+        allow create, update, delete: if false;
+      }
+
+      match /kitchenOrderActivity/{activityId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager', 'supervisor']);
+        allow create, update, delete: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager']);
+        allow create: if hasBusinessRole(businessId, ['owner', 'manager'])
+          && request.resource.data.keys().hasAll([
+            'description', 'category', 'amount', 'expenseDate', 'paymentMethod',
+            'supplierId', 'supplierNameSnapshot', 'reference', 'notes', 'status',
+            'createdAt', 'updatedAt', 'createdBy'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'description', 'category', 'amount', 'expenseDate', 'paymentMethod',
+            'supplierId', 'supplierNameSnapshot', 'reference', 'notes', 'status',
+            'createdAt', 'updatedAt', 'createdBy'
+          ])
+          && request.resource.data.description is string
+          && request.resource.data.description.size() > 0
+          && request.resource.data.category in [
+            'inventory', 'rent', 'utilities', 'transport', 'marketing',
+            'salaries', 'professional_services', 'taxes', 'other'
+          ]
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.expenseDate is timestamp
+          && request.resource.data.paymentMethod in ['cash', 'card', 'eft', 'mobile', 'other']
+          && request.resource.data.reference is string
+          && request.resource.data.notes is string
+          && request.resource.data.status == 'active'
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && (
+            (request.resource.data.supplierId == null && request.resource.data.supplierNameSnapshot == null)
+            || (
+              request.resource.data.supplierId is string
+              && get(/databases/$(database)/documents/businesses/$(businessId)/suppliers/$(request.resource.data.supplierId)).data.status == 'active'
+              && get(/databases/$(database)/documents/businesses/$(businessId)/suppliers/$(request.resource.data.supplierId)).data.name == request.resource.data.supplierNameSnapshot
+            )
+          );
+
+        allow update: if hasBusinessRole(businessId, ['owner', 'manager'])
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'description', 'category', 'amount', 'expenseDate', 'paymentMethod',
+            'supplierId', 'supplierNameSnapshot', 'reference', 'notes', 'status', 'updatedAt'
+          ])
+          && request.resource.data.description is string
+          && request.resource.data.description.size() > 0
+          && request.resource.data.category in [
+            'inventory', 'rent', 'utilities', 'transport', 'marketing',
+            'salaries', 'professional_services', 'taxes', 'other'
+          ]
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.expenseDate is timestamp
+          && request.resource.data.paymentMethod in ['cash', 'card', 'eft', 'mobile', 'other']
+          && request.resource.data.reference is string
+          && request.resource.data.notes is string
+          && request.resource.data.status in ['active', 'archived']
+          && (
+            (
+              request.resource.data.supplierId == resource.data.supplierId
+              && request.resource.data.supplierNameSnapshot == resource.data.supplierNameSnapshot
+            )
+            || (request.resource.data.supplierId == null && request.resource.data.supplierNameSnapshot == null)
+            || (
+              request.resource.data.supplierId is string
+              && get(/databases/$(database)/documents/businesses/$(businessId)/suppliers/$(request.resource.data.supplierId)).data.status == 'active'
+              && get(/databases/$(database)/documents/businesses/$(businessId)/suppliers/$(request.resource.data.supplierId)).data.name == request.resource.data.supplierNameSnapshot
+            )
+          );
+        allow delete: if false;
+      }
+
+      match /customers/{customerId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager', 'supervisor', 'cashier']);
+        allow create: if hasBusinessRole(businessId, ['owner', 'manager', 'supervisor'])
+          && request.resource.data.keys().hasAll([
+            'firstName', 'lastName', 'displayName', 'phone', 'email', 'birthday',
+            'notes', 'status', 'createdAt', 'updatedAt', 'createdBy'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'firstName', 'lastName', 'displayName', 'phone', 'email', 'birthday',
+            'notes', 'status', 'createdAt', 'updatedAt', 'createdBy'
+          ])
+          && request.resource.data.firstName is string
+          && request.resource.data.lastName is string
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() > 0
+          && request.resource.data.phone is string
+          && request.resource.data.email is string
+          && (request.resource.data.birthday == null || request.resource.data.birthday is string)
+          && request.resource.data.notes is string
+          && request.resource.data.status == 'active'
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow update: if hasBusinessRole(businessId, ['owner', 'manager', 'supervisor'])
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'firstName', 'lastName', 'displayName', 'phone', 'email', 'birthday',
+            'notes', 'status', 'updatedAt'
+          ])
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() > 0
+          && request.resource.data.firstName is string
+          && request.resource.data.lastName is string
+          && request.resource.data.phone is string
+          && request.resource.data.email is string
+          && (request.resource.data.birthday == null || request.resource.data.birthday is string)
+          && request.resource.data.notes is string
+          && request.resource.data.status in ['active', 'archived'];
+        allow delete: if false;
+      }
+
+      match /suppliers/{supplierId} {
+        allow read: if isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager']);
+        allow create: if hasBusinessRole(businessId, ['owner', 'manager'])
+          && request.resource.data.keys().hasAll([
+            'name', 'contactPerson', 'phone', 'email', 'address', 'notes',
+            'status', 'createdAt', 'updatedAt', 'createdBy'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'name', 'contactPerson', 'phone', 'email', 'address', 'notes',
+            'status', 'createdAt', 'updatedAt', 'createdBy'
+          ])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.contactPerson is string
+          && request.resource.data.phone is string
+          && request.resource.data.email is string
+          && request.resource.data.address is string
+          && request.resource.data.notes is string
+          && request.resource.data.status == 'active'
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow update: if hasBusinessRole(businessId, ['owner', 'manager'])
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'contactPerson', 'phone', 'email', 'address', 'notes', 'status', 'updatedAt'
+          ])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.contactPerson is string
+          && request.resource.data.phone is string
+          && request.resource.data.email is string
+          && request.resource.data.address is string
+          && request.resource.data.notes is string
+          && request.resource.data.status in ['active', 'archived'];
+        allow delete: if false;
+      }
+
+      match /{collectionName}/{documentId} {
+        allow read: if (
+          collectionName == 'invoices'
+          && (isPlatformAdmin() || hasBusinessRole(businessId, ['owner', 'manager']))
+        ) || (
+          collectionName == 'settings'
+          && (isPlatformAdmin() || hasBusinessRole(businessId, ['owner']))
+        );
+
+        allow create, update, delete: if (
+          collectionName == 'invoices'
+          && hasBusinessRole(businessId, ['owner', 'manager'])
+        ) || (
+          collectionName == 'settings'
+          && hasBusinessRole(businessId, ['owner'])
+        );
+      }
     }
 
-    match /{collection}/{document} {
-      // Applies to products, sales, expenses, customers, suppliers, etc.
-      allow read, delete: if isAdmin() || hasAccess(resource.data.businessId);
-      allow create: if isAdmin() || hasAccess(request.resource.data.businessId);
-      allow update: if isAdmin() ||
-        (hasAccess(resource.data.businessId) &&
-         request.resource.data.businessId == resource.data.businessId);
+    match /functionRateLimits/{counterId} {
+      allow read, write: if false;
     }
   }
 }

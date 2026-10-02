@@ -1,0 +1,20 @@
+{
+  "name": "smallbizz-functions",
+  "version": "0.1.0",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test lib/domain.test.js lib/restaurantDomain.test.js lib/staffDomain.test.js lib/staffAdmin.test.js lib/invitationDomain.test.js lib/emailService.test.js lib/security.test.js lib/operations.test.js lib/rateLimit.test.js"
+  },
+  "dependencies": {
+    "firebase-admin": "13.10.0",
+    "firebase-functions": "7.3.2"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2"
+  }
+}

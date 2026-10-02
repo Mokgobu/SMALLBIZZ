@@ -1,0 +1,6 @@
+import type { Promotion, PromotionStatus } from '../models/promotion'
+import type { Product } from '../models/product'
+import type { SaleRequestLine } from '../models/sale'
+
+export function promotionStatus(promotion: Pick<Promotion,'status'|'startsAt'|'endsAt'>, now=Date.now()): PromotionStatus { if(promotion.status==='draft'||promotion.status==='disabled') return promotion.status; if(now<promotion.startsAt)return 'scheduled'; if(now>=promotion.endsAt)return 'expired'; return 'active' }
+export function estimatePromotionDiscount(promotion: Promotion, lines: SaleRequestLine[], products: Product[]) { const selected=lines.map(line=>({line,product:products.find(p=>p.id===line.productId)})).filter((v):v is {line:SaleRequestLine;product:Product}=>Boolean(v.product)); const eligible=promotion.type==='product_percentage'?selected.filter(v=>v.product.id===promotion.productId):promotion.type==='category_percentage'?selected.filter(v=>v.product.category===promotion.category):selected; const subtotal=eligible.reduce((sum,v)=>sum+v.product.sellingPrice*v.line.quantity,0); if(!subtotal)return 0; const amount=promotion.type==='fixed'?promotion.value:subtotal*promotion.value/100; return Math.min(subtotal,promotion.maxDiscountAmount??amount,amount) }
